@@ -5,6 +5,7 @@ import subprocess as sp
 import threading
 import time
 from pathlib import Path
+import pandas as pd
 from socket import *
 
 import virtualbox
@@ -196,12 +197,45 @@ def generate_shelxt_input(unitcell, spgr, composition, path):
     print(f'SHELXT ins file generated at {path}.')
 
 
+def high_resolution_cutter(path, min_high_res = 1.3, constrain_res = True) -> float:
+    correctlp_path = Path(path) / 'CORRECT.LP'
+    # could there be multiple correctlp tables? Set a counter to warn if multiple are found.
+    # did find multiple tables. Using the last one since that is statistics for XDS.ASCCII.
+    table_counter = 0
+    columns = ['Resolution','NumberOfReflections_obs', 'NumberOfReflections_uniq','NumberOfReflections_possible', 
+                    'Completeness', 'R-factor_obs', 'R-factor_exp', 'compared', 'ISigma', 'R-meas', 'CChalf', 'anomal_corr', 'sigano', 'nano']
+                
+    with open(correctlp_path, 'r') as f:
+        lines = f.readlines()
+        for i, line in enumerate(lines):
+            if 'RESOLUTION     NUMBER OF REFLECTIONS    COMPLETENESS R-FACTOR  R-FACTOR COMPARED I/SIGMA   R-meas  CC(1/2) ' in line:
+                table_counter += 1
+                append_list = []
+                while not lines[i + 3].isspace():
+                    append_list.append(lines[i + 3].split())
+                    i += 1
+                        
+                df=pd.DataFrame(append_list,columns=columns)
+
+    cut_index = 0
+    for index, row in df.iloc[:-1].iterrows():
+        if float(row['ISigma']) > 1 or ('*' in row['CChalf']):
+            cut_index = index
+            
+    high_cut = float(df.loc[cut_index, 'Resolution'])
+    if constrain_res and high_cut > min_high_res:
+        high_cut = min_high_res
+        
+    return high_cut
+
 def generate_xdsconv_input(path):
+    highres_cut = high_resolution_cutter(path)
+
     out = Path(path) / 'XDSCONV.INP'
     f = open(out, 'w')
-    print("""
+    print(f"""
 INPUT_FILE= XDS_ASCII.HKL
-INCLUDE_RESOLUTION_RANGE= 20 0.8 ! optional
+INCLUDE_RESOLUTION_RANGE= 20 {highres_cut} ! optional
 OUTPUT_FILE= shelx.hkl  SHELX    ! Warning: do _not_ name this file "temp.mtz" !
 FRIEDEL'S_LAW= FALSE             ! default is FRIEDEL'S_LAW=TRUE""", file=f)
 
